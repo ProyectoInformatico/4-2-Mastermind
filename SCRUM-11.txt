@@ -3,10 +3,12 @@
 
 Los 64 LEDs están conectados internamente formando una sola línea de datos en forma de serpiente o matriz. El microcontrolador envía una cadena de datos digital por un solo pin , y cada LED toma su porción de color y pasa el resto de la información al siguiente de la fila.
 Cada LED consume hasta 60 mA con el color blanco al máximo brillo. Los 64 LEDs encendidos a tope consumen cerca de 3.5 A.
-Se usa para mostrar información visual mediante los LED RGB. Gracias a sus 64 neopixels, permite representar diferentes colores, símbolos, letras y números.En nuestro proyecto, se utiliza para mostrar patrones de luces de forma aleatoria, permitiendo generar diferentes combinaciones de colores y efectos visuales. Esto hace que el sistema sea más dinámico e interactivo.  
-También puede utilizarse en carteles electrónicos, indicadores de estado, juegos, decoración e iluminación.
-Las conexiones con el arduino basicamente serian con un cable 5V, GNG y cualquier pin, en este caso usamos el 6
 
+Se usa para mostrar información visual mediante los LED RGB. Gracias a sus 64 neopixels, permite representar diferentes colores, símbolos, letras y números.En nuestro proyecto, se utiliza para mostrar patrones de luces de forma aleatoria, permitiendo generar diferentes combinaciones de colores y efectos visuales. Esto hace que el sistema sea más dinámico e interactivo.
+
+También puede utilizarse en carteles electrónicos, indicadores de estado, juegos, decoración e iluminación.
+
+Las conexiones con el arduino basicamente serian con un cable 5V, GNG y cualquier pin, en este caso usamos el 6
 
 Para programarla seria los siguente:
 Se define el número total de píxeles (64).

@@ -1,0 +1,54 @@
+﻿El manejo de la matriz 8x8 se basa en controlar 64 LEDS RGB en un panel de forma aleatoria usando el unico pin del en el arduino
+
+
+Los 64 LEDs están conectados internamente formando una sola línea de datos en forma de serpiente o matriz. El microcontrolador envía una cadena de datos digital por un solo pin , y cada LED toma su porción de color y pasa el resto de la información al siguiente de la fila.
+Cada LED consume hasta 60 mA con el color blanco al máximo brillo. Los 64 LEDs encendidos a tope consumen cerca de 3.5 A.
+
+
+Las conexiones con el arduino basicamente serian con un cable 5V, GNG y cualquier pin, en este caso usamos el 6
+
+
+Para programarla seria los siguente:
+Se define el número total de píxeles (64).
+Se inicializa el objeto de control indicando el pin y la cantidad de LEDs.
+Se usan comandos como “pixel.setPixelColor(n, rojo, verde, azul)” para elegir el color de un LED específico y “pixel.show()” para reflejar los cambios físicamente.
+ej:
+#include <Adafruit_NeoPixel.h>
+
+
+#define PIN_DATOS   6
+#define NUM_LEDS   64 
+
+
+Adafruit_NeoPixel matriz = Adafruit_NeoPixel(NUM_LEDS, PIN_DATOS, NEO_GRB + NEO_KHZ800);
+
+
+void setup() {
+  matriz.begin();          
+  matriz.setBrightness(30); 
+  matriz.show();         
+}
+
+
+void loop() {
+
+
+  for(int i = 0; i < NUM_LEDS; i++) {
+    matriz.setPixelColor(i, matriz.Color(0, 0, 255)); // (ID, R, G, B)
+  }
+  matriz.show(); 
+  delay(1000);   
+
+
+  for(int i = 0; i < NUM_LEDS; i++) {
+    matriz.setPixelColor(i, matriz.Color(0, 255, 0));
+  }
+  matriz.show();
+  delay(1000);
+
+
+  matriz.clear(); 
+  matriz.setPixelColor(0, matriz.Color(255, 0, 0));
+  matriz.show();
+  delay(2000);
+}

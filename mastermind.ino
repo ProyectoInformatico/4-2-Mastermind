@@ -113,11 +113,6 @@ void tocarMelodia() {               // solo se usa al ganar
   }
 }
 
-// =====================================================
-//                        LCD
-// =====================================================
-// Escribe un texto en una linea y rellena con espacios
-// (asi no hace falta LCD.clear(), que provoca parpadeo)
 void mostrarLinea(byte linea, const char* texto) {
   char buf[17];
   snprintf(buf, sizeof(buf), "%-16s", texto);
@@ -171,7 +166,7 @@ void dibujarPistas(byte f, byte exactos, byte parciales) {
 }
 
 
-// Devuelve true si el encoder giro y actualiza "color"
+
 bool leerEncoder() {
   bool huboCambio = false;
   int estadoCLK = digitalRead(PIN_CLK);
@@ -189,7 +184,7 @@ bool leerEncoder() {
   return huboCambio;
 }
 
-// Devuelve true UNA sola vez por pulsacion (con antirrebote)
+
 bool botonPresionado() {
   if (digitalRead(PIN_SW) == LOW) {
     delay(30);                              // antirrebote
@@ -202,9 +197,7 @@ bool botonPresionado() {
   return false;
 }
 
-// =====================================================
-//                  LOGICA DEL JUEGO
-// =====================================================
+
 void generarClave() {
   for (byte i = 0; i < LARGO_CLAVE; i++) {
     claveSecreta[i] = random(0, CANT_COLORES);
@@ -262,7 +255,7 @@ void perder() {
   juegoTerminado = true;
 }
 
-// Compara combinacionJugador con claveSecreta y dibuja las pistas
+
 void evaluarIntento() {
   byte exactos = 0;
   byte parciales = 0;

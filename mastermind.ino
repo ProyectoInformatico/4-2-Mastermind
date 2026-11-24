@@ -1,14 +1,21 @@
 #include <LiquidCrystal.h>
 #include <Adafruit_NeoPixel.h>
-
+#include <avr/pgmspace.h>
 
 #define NEO_PIN     3
+
+// CONFIGURACION PARA PINES DEL ENCODER ROTATIVO
 #define PIN_CLK     7
 #define PIN_DT      4
 #define PIN_SW      2
+
+// Buzzer
 #define PIN_BUZZER  8
 
+// CONFIGURACION DE PINES DEL LCD NORMAL (RS, E, D4, D5, D6, D7)
+LiquidCrystal LCD(12, 11, 10, 9, 6, 5);
 
+// NOTAS PARA EL BUZZER
 #define NOTE_C4 262
 #define NOTE_D4 294
 #define NOTE_E4 330
@@ -22,23 +29,18 @@
 #define NOTE_G5 784
 #define NOTE_C6 1047
 
-
+// CONFIGURACION DE LA MATRIZ 8*8
 #define CANT_PIXEL 64
+Adafruit_NeoPixel Pixel(CANT_PIXEL, NEO_PIN, NEO_GRB + NEO_KHZ800);
 
 const byte ANCHO_MATRIZ  = 8;      // pixeles por fila
-const byte LARGO_CLAVE   = 4;      // celdas de color por intento
-const byte MAX_INTENTOS  = 8;      // filas de la matriz
-const byte CANT_COLORES  = 6;      // colores disponibles
-const byte BRILLO        = 40;     // 0-255 (bajo = menos consumo)
+const byte LARGO_MAX     = 5;      // maximo de celdas de color (nivel 2 = 5)
+const byte COLORES_MAX   = 6;      // maximo de colores disponibles
 const bool MATRIZ_ZIGZAG = false;  // true si tu matriz invierte el sentido en filas impares
 const bool MODO_DEBUG    = false;  // true = muestra la clave por el monitor serie
+const unsigned long TIEMPO_NIVEL2_MS = 150000UL; // 2 min 30 seg
 
-
-Adafruit_NeoPixel Pixel(CANT_PIXEL, NEO_PIN, NEO_GRB + NEO_KHZ800);
-LiquidCrystal LCD(5, 6, 10, 11, 12, 13);   // RS, E, D4, D5, D6, D7
-
-
-const uint8_t PALETA[CANT_COLORES][3] = {
+const uint8_t PALETA[COLORES_MAX] PROGMEM = {
   {255,   0,   0},   // 0 Rojo
   {  0, 255,   0},   // 1 Verde
   {  0,   0, 255},   // 2 Azul
@@ -47,91 +49,137 @@ const uint8_t PALETA[CANT_COLORES][3] = {
   {255,   0, 255}    // 5 Magenta
 };
 
-const char* NOMBRES[CANT_COLORES] = {
+const char* const NOMBRES[COLORES_MAX] = {
   "Rojo", "Verde", "Azul", "Amarillo", "Cian", "Magenta"
 };
 
-byte claveSecreta[LARGO_CLAVE];
-byte combinacionJugador[LARGO_CLAVE];
+// VARIABLES PARA EL MODO DE JUEGO CONTRA RELOJ
+byte nivel           = 1;
+byte largoClave      = 4;
+byte maxIntentos     = 8;
+byte cantColores     = 6;
+byte filasPorIntento = 1;
+unsigned long tiempoLimite = 0;
+unsigned long inicioJuego  = 0;
+int  segPrevios = -1;
 
-byte fila    = 0;      // intento actual (0 a 7)
-byte columna = 0;      // celda actual (0 a 3)
-byte color   = 0;      // color seleccionado (0 a 5)
-int  ultimoCLK;        // ultimo estado del pin CLK del encoder
+byte claveSecreta[LARGO_MAX];
+byte combinacionJugador[LARGO_MAX];
+
+byte fila_Activa    = 0;      // intento actual
+byte columna_Activa = 0;      // celda actual
+byte colorSelect    = 0;      // color seleccionado
+int  ultimoCLK;               // ultimo estado del pin CLK del encoder
 bool juegoTerminado = false;
 
-
-const int melody[] = {
+const int melody[] PROGMEM = {
   NOTE_E4, NOTE_F4, NOTE_G4, NOTE_C5, NOTE_B4, NOTE_G4, NOTE_E4, NOTE_D4,
   NOTE_E4, NOTE_F4, NOTE_G4, NOTE_C5, NOTE_B4, NOTE_G4, NOTE_D5, NOTE_E5,
   NOTE_D5, NOTE_C5, NOTE_G4, NOTE_A4, NOTE_F4, NOTE_E4, NOTE_D4, NOTE_C4,
   NOTE_D4, NOTE_E4, NOTE_G4, NOTE_F4, NOTE_E4, NOTE_D4
 };
 
-const int noteDurations[] = {
+const uint8_t noteDurations[] PROGMEM = {
   4, 4, 4, 2, 4, 4, 4, 2,
   4, 4, 4, 2, 4, 4, 1, 4,
   4, 4, 2, 4, 4, 4, 2, 4,
   4, 4, 4, 4, 4, 1
 };
+const byte CANT_NOTAS = sizeof(melody) / sizeof(melody);
 
+// Control de audio sin bloquear el reloj
+enum TipoAudio { AUDIO_NINGUNO, AUDIO_ERROR, AUDIO_VICTORIA, AUDIO_MELODIA };
+TipoAudio audioActual = AUDIO_NINGUNO;
+byte pasoAudio = 0;
+unsigned long tiempoAudio = 0;
+unsigned long esperaAudio = 0;
 
-void sonidoConfirmar() {            // beep corto al fijar un color
-  tone(PIN_BUZZER, NOTE_A4, 80);
-  delay(100);
+void iniciarAudio(TipoAudio tipo) {
   noTone(PIN_BUZZER);
+  audioActual = tipo;
+  pasoAudio = 0;
+  tiempoAudio = millis();
+  esperaAudio = 0;
 }
 
-void sonidoError() {                // intento incorrecto
-  tone(PIN_BUZZER, 200, 300);
-  delay(350);
-  tone(PIN_BUZZER, 150, 500);
-  delay(550);
-  noTone(PIN_BUZZER);
+void actualizarAudio() {
+  if (audioActual == AUDIO_NINGUNO) return;
+  if (millis() - tiempoAudio < esperaAudio) return;
+
+  tiempoAudio = millis();
+
+  if (audioActual == AUDIO_ERROR) {
+    if (pasoAudio == 0) {
+      tone(PIN_BUZZER, 200, 300);
+      esperaAudio = 350;
+      pasoAudio++;
+    } else if (pasoAudio == 1) {
+      tone(PIN_BUZZER, 150, 500);
+      esperaAudio = 550;
+      pasoAudio++;
+    } else {
+      noTone(PIN_BUZZER);
+      audioActual = AUDIO_NINGUNO;
+    }
+  } 
+  else if (audioActual == AUDIO_VICTORIA) {
+    const int notasVic[] = { NOTE_C5, NOTE_E5, NOTE_G5, NOTE_C6 };
+    const int durVic[]   = { 200, 200, 200, 600 };
+    if (pasoAudio < 4) {
+      tone(PIN_BUZZER, notasVic[pasoAudio], durVic[pasoAudio]);
+      esperaAudio = durVic[pasoAudio] + 50;
+      pasoAudio++;
+    } else {
+      iniciarAudio(AUDIO_MELODIA);
+    }
+  } 
+  else if (audioActual == AUDIO_MELODIA) {
+    if (pasoAudio < CANT_NOTAS) {
+      int nota = pgm_read_word(&melody[pasoAudio]);
+      uint8_t div = pgm_read_byte(&noteDurations[pasoAudio]);
+      int duracion = 1000 / div;
+      tone(PIN_BUZZER, nota, duracion);
+      esperaAudio = (unsigned long)(duracion * 1.30);
+      pasoAudio++;
+    } else {
+      noTone(PIN_BUZZER);
+      audioActual = AUDIO_NINGUNO;
+    }
+  }
 }
 
-void sonidoVictoria() {             // fanfarria ascendente
-  tone(PIN_BUZZER, NOTE_C5, 200);
-  delay(250);
-  tone(PIN_BUZZER, NOTE_E5, 200);
-  delay(250);
-  tone(PIN_BUZZER, NOTE_G5, 200);
-  delay(250);
-  tone(PIN_BUZZER, NOTE_C6, 600);
-  delay(650);
-  noTone(PIN_BUZZER);
-}
-
-void tocarMelodia() {               // solo se usa al ganar
-  int cantidad = sizeof(melody) / sizeof(melody[0]);
-
-  for (int i = 0; i < cantidad; i++) {
-    int duracion = 1000 / noteDurations[i];
-    tone(PIN_BUZZER, melody[i], duracion);
-    delay(duracion * 1.30);
-    noTone(PIN_BUZZER);
+void sonidoConfirmar() {
+  if (audioActual == AUDIO_NINGUNO) {
+    tone(PIN_BUZZER, NOTE_A4, 70);
   }
 }
 
 void mostrarLinea(byte linea, const char* texto) {
-  char buf[17];
+  char buf;
   snprintf(buf, sizeof(buf), "%-16s", texto);
   LCD.setCursor(0, linea);
   LCD.print(buf);
 }
 
-void actualizarLCD() {
-  char buf[20];
+int segundosRestantes() {
+  unsigned long transcurrido = millis() - inicioJuego;
+  if (transcurrido >= tiempoLimite) return 0;
+  return (int)((tiempoLimite - transcurrido + 999UL) / 1000UL);
+}
 
-  snprintf(buf, sizeof(buf), "Intento: %d/%d", fila + 1, MAX_INTENTOS);
+void actualizarLCD() {
+  char buf;
+  if (tiempoLimite > 0) {
+    snprintf(buf, sizeof(buf), "Int:%d/%d T:%3ds", fila_Activa + 1, maxIntentos, segundosRestantes());
+  } else {
+    snprintf(buf, sizeof(buf), "Intento: %d/%d", fila_Activa + 1, maxIntentos);
+  }
   mostrarLinea(0, buf);
 
-  snprintf(buf, sizeof(buf), "Color: %s", NOMBRES[color]);
+  snprintf(buf, sizeof(buf), "Color: %s", NOMBRES[colorSelect]);
   mostrarLinea(1, buf);
 }
 
-
-// Convierte (fila, columna) en el numero de LED
 uint8_t indicePixel(byte f, byte c) {
   if (MATRIZ_ZIGZAG && (f % 2 == 1)) {
     return (f * ANCHO_MATRIZ) + (ANCHO_MATRIZ - 1 - c);
@@ -140,72 +188,113 @@ uint8_t indicePixel(byte f, byte c) {
 }
 
 uint32_t colorPaleta(byte i) {
-  return Pixel.Color(PALETA[i][0], PALETA[i][1], PALETA[i][2]);
+  uint8_t r = pgm_read_byte(&PALETA[i]);
+  uint8_t g = pgm_read_byte(&PALETA[i]);
+  uint8_t b = pgm_read_byte(&PALETA[i]);
+  return Pixel.Color(r, g, b);
 }
 
 void dibujarColor(byte f, byte c, byte col) {
-  Pixel.setPixelColor(indicePixel(f, c), colorPaleta(col));
+  Pixel.setPixelColor(indicePixel(f * filasPorIntento, c), colorPaleta(col));
   Pixel.show();
 }
 
-// Pistas en las columnas 4 a 7:
-//   BLANCO  = color correcto en posicion correcta
-//   NARANJA = color correcto en posicion incorrecta
 void dibujarPistas(byte f, byte exactos, byte parciales) {
-  byte col = LARGO_CLAVE;   // la primera pista va en la columna 4
+  byte filaPix, col;
+  if (filasPorIntento == 1) {
+    filaPix = f;
+    col = largoClave;
+  } else {
+    filaPix = f * filasPorIntento + 1;
+    col = 0;
+  }
 
   for (byte i = 0; i < exactos; i++) {
-    Pixel.setPixelColor(indicePixel(f, col), Pixel.Color(255, 255, 255));
+    Pixel.setPixelColor(indicePixel(filaPix, col), Pixel.Color(255, 255, 255));
     col++;
   }
   for (byte i = 0; i < parciales; i++) {
-    Pixel.setPixelColor(indicePixel(f, col), Pixel.Color(255, 90, 0));
+    Pixel.setPixelColor(indicePixel(filaPix, col), Pixel.Color(255, 90, 0));
     col++;
   }
   Pixel.show();
 }
 
-
-
-bool leerEncoder() {
-  bool huboCambio = false;
+int8_t leerEncoder() {
+  static unsigned long ultimoTiempoGiro = 0;
+  int8_t giro = 0;
   int estadoCLK = digitalRead(PIN_CLK);
 
   if (estadoCLK != ultimoCLK && estadoCLK == LOW) {
-    if (digitalRead(PIN_DT) != estadoCLK) {
-      color = (color + 1) % CANT_COLORES;
-    } else {
-      color = (color + CANT_COLORES - 1) % CANT_COLORES;
+    if (millis() - ultimoTiempoGiro > 5) {
+      giro = (digitalRead(PIN_DT) != estadoCLK) ? 1 : -1;
+      ultimoTiempoGiro = millis();
     }
-    huboCambio = true;
   }
-
   ultimoCLK = estadoCLK;
-  return huboCambio;
+  return giro;
 }
-
 
 bool botonPresionado() {
-  if (digitalRead(PIN_SW) == LOW) {
-    delay(30);                              // antirrebote
-    if (digitalRead(PIN_SW) == LOW) {
-      while (digitalRead(PIN_SW) == LOW) {} // espera a que lo suelte
-      delay(30);
-      return true;
+  static bool estadoAnterior = HIGH;
+  static unsigned long ultimoCambio = 0;
+  bool estadoActual = digitalRead(PIN_SW);
+  bool evento = false;
+
+  if (estadoActual != estadoAnterior && (millis() - ultimoCambio > 35)) {
+    ultimoCambio = millis();
+    if (estadoActual == LOW) {
+      evento = true;
     }
+    estadoAnterior = estadoActual;
   }
-  return false;
+  return evento;
 }
 
+void mostrarNivelMenu() {
+  mostrarLinea(0, "Elige nivel:");
+  if (nivel == 1) mostrarLinea(1, "< 1 Normal >");
+  else mostrarLinea(1, "< 2 Reloj >");
+}
+
+void menuNivel() {
+  iniciarAudio(AUDIO_NINGUNO);
+  mostrarNivelMenu();
+  ultimoCLK = digitalRead(PIN_CLK);
+
+  while (true) {
+    if (leerEncoder() != 0) {
+      nivel = (nivel == 1) ? 2 : 1;
+      mostrarNivelMenu();
+    }
+    if (botonPresionado()) break;
+  }
+
+  randomSeed(micros() ^ analogRead(A0));
+  if (nivel == 1) {
+    largoClave      = 4;
+    maxIntentos     = 8;
+    cantColores     = 6;
+    filasPorIntento = 1;
+    tiempoLimite    = 0;
+  } else {
+    largoClave      = 5;
+    maxIntentos     = 4;
+    cantColores     = 5;
+    filasPorIntento = 2;
+    tiempoLimite    = TIEMPO_NIVEL2_MS;
+  }
+  ultimoCLK = digitalRead(PIN_CLK);
+}
 
 void generarClave() {
-  for (byte i = 0; i < LARGO_CLAVE; i++) {
-    claveSecreta[i] = random(0, CANT_COLORES);
+  for (byte i = 0; i < largoClave; i++) {
+    claveSecreta[i] = random(0, cantColores);
   }
 
   if (MODO_DEBUG) {
-    Serial.print("Clave: ");
-    for (byte i = 0; i < LARGO_CLAVE; i++) {
+    Serial.print(F("Clave: "));
+    for (byte i = 0; i < largoClave; i++) {
       Serial.print(claveSecreta[i]);
       Serial.print(' ');
     }
@@ -217,52 +306,48 @@ void reiniciarJuego() {
   Pixel.clear();
   generarClave();
 
-  fila = 0;
-  columna = 0;
-  color = 0;
+  fila_Activa = 0;
+  columna_Activa = 0;
+  colorSelect = 0;
   juegoTerminado = false;
+  inicioJuego = millis();
+  segPrevios = -1;
 
-  dibujarColor(fila, columna, color);
+  dibujarColor(fila_Activa, columna_Activa, colorSelect);
   actualizarLCD();
 }
 
 void ganar() {
-  delay(800);
-  mostrarLinea(0, "GANASTE!");
-  char buf[20];
-  snprintf(buf, sizeof(buf), "En %d intento(s)", fila + 1);
-  mostrarLinea(1, buf);
-
-  sonidoVictoria();
-  tocarMelodia();
-
+  char buf;
+  snprintf(buf, sizeof(buf), "GANASTE! (%d int)", fila_Activa + 1);
+  mostrarLinea(0, buf);
   mostrarLinea(1, "Presiona boton");
+
+  iniciarAudio(AUDIO_VICTORIA);
   juegoTerminado = true;
 }
 
-void perder() {
-  mostrarLinea(0, "PERDISTE");
+void perder(bool porTiempo) {
+  mostrarLinea(0, porTiempo ? "SE ACABO TIEMPO" : "PERDISTE");
   mostrarLinea(1, "Mira la clave");
 
-  // Muestra la clave secreta en la primera fila
   Pixel.clear();
-  for (byte i = 0; i < LARGO_CLAVE; i++) {
+  for (byte i = 0; i < largoClave; i++) {
     Pixel.setPixelColor(indicePixel(0, i), colorPaleta(claveSecreta[i]));
   }
   Pixel.show();
 
-  sonidoError();
+  iniciarAudio(AUDIO_ERROR);
   juegoTerminado = true;
 }
-
 
 void evaluarIntento() {
   byte exactos = 0;
   byte parciales = 0;
-  byte contClave[CANT_COLORES] = {0};
-  byte contJugador[CANT_COLORES] = {0};
+  byte contClave[COLORES_MAX] = {0};
+  byte contJugador[COLORES_MAX] = {0};
 
-  for (byte i = 0; i < LARGO_CLAVE; i++) {
+  for (byte i = 0; i < largoClave; i++) {
     if (combinacionJugador[i] == claveSecreta[i]) {
       exactos++;
     } else {
@@ -271,80 +356,92 @@ void evaluarIntento() {
     }
   }
 
-
-  for (byte c = 0; c < CANT_COLORES; c++) {
+  for (byte c = 0; c < cantColores; c++) {
     parciales += min(contClave[c], contJugador[c]);
   }
 
-  dibujarPistas(fila, exactos, parciales);
+  dibujarPistas(fila_Activa, exactos, parciales);
 
-  if (exactos == LARGO_CLAVE) {
+  if (exactos == largoClave) {
     ganar();
     return;
   }
 
-  sonidoError();
-  fila++;
+  iniciarAudio(AUDIO_ERROR);
+  fila_Activa++;
 
-  if (fila >= MAX_INTENTOS) {
-    perder();
+  if (fila_Activa >= maxIntentos) {
+    perder(false);
   } else {
-    columna = 0;
-    color = 0;
-    dibujarColor(fila, columna, color);
+    columna_Activa = 0;
+    colorSelect = 0;
+    dibujarColor(fila_Activa, columna_Activa, colorSelect);
     actualizarLCD();
   }
 }
 
-// Fija el color elegido en la celda actual
 void confirmarColor() {
-  combinacionJugador[columna] = color;
+  combinacionJugador[columna_Activa] = colorSelect;
   sonidoConfirmar();
-  columna++;
+  columna_Activa++;
 
-  if (columna >= LARGO_CLAVE) {
+  if (columna_Activa >= largoClave) {
     evaluarIntento();
   } else {
-    dibujarColor(fila, columna, color);   // vista previa en la siguiente celda
+    dibujarColor(fila_Activa, columna_Activa, colorSelect);
   }
 }
 
 void setup() {
   pinMode(PIN_CLK, INPUT_PULLUP);
   pinMode(PIN_DT, INPUT_PULLUP);
+
   pinMode(PIN_SW, INPUT_PULLUP);
   pinMode(PIN_BUZZER, OUTPUT);
-
   if (MODO_DEBUG) Serial.begin(9600);
-
   Pixel.begin();
-  Pixel.setBrightness(BRILLO);
+  Pixel.setBrightness(50);
   Pixel.clear();
   Pixel.show();
-
+  // Inicializacion de LCD normal de 16x2
   LCD.begin(16, 2);
   mostrarLinea(0, "-M-Bienvenido-M-");
   mostrarLinea(1, "Iniciando...");
   delay(1500);
-
-  randomSeed(analogRead(A0));   // A0 debe quedar sin conectar
-  ultimoCLK = digitalRead(PIN_CLK);
-
+  menuNivel();
   reiniciarJuego();
 }
-
 void loop() {
+  actualizarAudio();
   if (juegoTerminado) {
-    if (botonPresionado()) reiniciarJuego();
-    return;
-  }
-
-  if (leerEncoder()) {
-    dibujarColor(fila, columna, color);   // vista previa del color
-    actualizarLCD();
-  }
-
   if (botonPresionado()) {
-    confirmarColor();
+  menuNivel();
+  reiniciarJuego();
+  }
+  return;
+  }
+  if (tiempoLimite > 0) {
+    if (millis() - inicioJuego >= tiempoLimite) {
+      perder(true);
+      return;
+    }
+    int seg = segundosRestantes();
+    if (seg != segPrevios) {
+      segPrevios = seg;
+      actualizarLCD(); // <-- ADENTRO del if (solo actualiza 1 vez por segundo)
+    }
+  }
+}
+actualizarLCD();
+  
+  }
+  int8_t giro = leerEncoder();
+  if (giro != 0) {
+  colorSelect = (colorSelect + cantColores + giro) % cantColores;
+  dibujarColor(fila_Activa, columna_Activa, colorSelect);
+  actualizarLCD();
+  }
+  if (botonPresionado()) {
+  confirmarColor();
   }
 }

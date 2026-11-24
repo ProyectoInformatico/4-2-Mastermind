@@ -1,4 +1,5 @@
-#include <LiquidCrystal.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #include <Adafruit_NeoPixel.h>
 #include <avr/pgmspace.h>
 
@@ -12,8 +13,8 @@
 // Buzzer
 #define PIN_BUZZER  8
 
-// CONFIGURACION DE PINES DEL LCD NORMAL (RS, E, D4, D5, D6, D7)
-LiquidCrystal LCD(12, 11, 10, 9, 6, 5);
+// CONFIGURACION DEL LCD I2C (Direccion 0x27 o 0x3F, 16 columnas, 2 filas)
+LiquidCrystal_I2C LCD(0x27, 16, 2);
 
 // NOTAS PARA EL BUZZER
 #define NOTE_C4 262
@@ -37,10 +38,10 @@ const byte ANCHO_MATRIZ  = 8;      // pixeles por fila
 const byte LARGO_MAX     = 5;      // maximo de celdas de color (nivel 2 = 5)
 const byte COLORES_MAX   = 6;      // maximo de colores disponibles
 const bool MATRIZ_ZIGZAG = false;  // true si tu matriz invierte el sentido en filas impares
-const bool MODO_DEBUG    = false;  // true = muestra la clave por el monitor serie
+const bool MODO_DEBUG    = true;  // true = muestra la clave por el monitor serie
 const unsigned long TIEMPO_NIVEL2_MS = 150000UL; // 2 min 30 seg
 
-// CORREGIDO: ahora es un arreglo de 2 dimensiones [color][R,G,B]
+// Arreglo de 2 dimensiones [color][R,G,B] en Flash
 const uint8_t PALETA[COLORES_MAX][3] PROGMEM = {
   {255,   0,   0},   // 0 Rojo
   {  0, 255,   0},   // 1 Verde
@@ -86,7 +87,6 @@ const uint8_t noteDurations[] PROGMEM = {
   4, 4, 2, 4, 4, 4, 2, 4,
   4, 4, 4, 4, 4, 1
 };
-// CORREGIDO: se divide entre el tamano de UN elemento
 const byte CANT_NOTAS = sizeof(melody) / sizeof(melody[0]);
 
 // Control de audio sin bloquear el reloj
@@ -157,7 +157,7 @@ void sonidoConfirmar() {
 }
 
 void mostrarLinea(byte linea, const char* texto) {
-  char buf[17];                                   // CORREGIDO: 16 caracteres + terminador
+  char buf[17];
   snprintf(buf, sizeof(buf), "%-16s", texto);
   LCD.setCursor(0, linea);
   LCD.print(buf);
@@ -170,7 +170,7 @@ int segundosRestantes() {
 }
 
 void actualizarLCD() {
-  char buf[17];                                   // CORREGIDO
+  char buf[17];
   if (tiempoLimite > 0) {
     snprintf(buf, sizeof(buf), "Int:%d/%d T:%3ds", fila_Activa + 1, maxIntentos, segundosRestantes());
   } else {
@@ -190,7 +190,6 @@ uint8_t indicePixel(byte f, byte c) {
 }
 
 uint32_t colorPaleta(byte i) {
-  // CORREGIDO: se lee cada componente (0=R, 1=G, 2=B)
   uint8_t r = pgm_read_byte(&PALETA[i][0]);
   uint8_t g = pgm_read_byte(&PALETA[i][1]);
   uint8_t b = pgm_read_byte(&PALETA[i][2]);
@@ -321,7 +320,7 @@ void reiniciarJuego() {
 }
 
 void ganar() {
-  char buf[17];                                   // CORREGIDO
+  char buf[17];
   snprintf(buf, sizeof(buf), "GANASTE! (%d int)", fila_Activa + 1);
   mostrarLinea(0, buf);
   mostrarLinea(1, "Presiona boton");
@@ -394,66 +393,53 @@ void confirmarColor() {
     dibujarColor(fila_Activa, columna_Activa, colorSelect);
   }
 }
-
 void setup() {
   pinMode(PIN_CLK, INPUT_PULLUP);
   pinMode(PIN_DT, INPUT_PULLUP);
   pinMode(PIN_SW, INPUT_PULLUP);
   pinMode(PIN_BUZZER, OUTPUT);
-
   if (MODO_DEBUG) Serial.begin(9600);
-
-  Pixel.begin();
-  Pixel.setBrightness(50);
-  Pixel.clear();
-  Pixel.show();
-
-  // Inicializacion de LCD normal de 16x2
-  LCD.begin(16, 2);
+    Pixel.begin();
+    Pixel.setBrightness(50);
+    Pixel.clear();
+    Pixel.show();
+// Inicializacion del LCD I2C
+  LCD.init();
+  LCD.backlight();
   mostrarLinea(0, "-M-Bienvenido-M-");
   mostrarLinea(1, "Iniciando...");
   delay(1500);
-
   menuNivel();
   reiniciarJuego();
 }
 
-// CORREGIDO: llaves balanceadas y sin actualizarLCD() suelto en cada vuelta
 void loop() {
   actualizarAudio();
-
-  // Juego terminado: esperar boton para reiniciar
   if (juegoTerminado) {
-    if (botonPresionado()) {
-      menuNivel();
-      reiniciarJuego();
-    }
-    return;
-  }
-
-  // Reloj del nivel 2
-  if (tiempoLimite > 0) {
-    if (millis() - inicioJuego >= tiempoLimite) {
-      perder(true);
-      return;
-    }
-    int seg = segundosRestantes();
-    if (seg != segPrevios) {
-      segPrevios = seg;
-      actualizarLCD();   // solo 1 vez por segundo
-    }
-  }
-
-  // Encoder: cambiar color
-  int8_t giro = leerEncoder();
-  if (giro != 0) {
-    colorSelect = (colorSelect + cantColores + giro) % cantColores;
-    dibujarColor(fila_Activa, columna_Activa, colorSelect);
-    actualizarLCD();
-  }
-
-  // Boton: confirmar color
   if (botonPresionado()) {
-    confirmarColor();
-  }
+  menuNivel();
+  reiniciarJuego();
+}
+  return;
+}
+  if (tiempoLimite > 0) {
+  if (millis() - inicioJuego >= tiempoLimite) {
+  perder(true);
+  return;
+}
+  int seg = segundosRestantes();
+   if (seg != segPrevios) {
+     segPrevios = seg;
+     actualizarLCD();
+}
+}
+int8_t giro = leerEncoder();
+if (giro != 0) {
+colorSelect = (colorSelect + cantColores + giro) % cantColores;
+dibujarColor(fila_Activa, columna_Activa, colorSelect);
+actualizarLCD();
+}
+if (botonPresionado()) {
+confirmarColor();
+}
 }
